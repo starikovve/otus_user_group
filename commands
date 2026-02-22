@@ -1,0 +1,226 @@
+useradd otus0512
+cat /etc/passwd
+useradd -m otus0502 # создание пользователя с домашним каталогом
+useradd -m -d /custom/home/username username # указание домашнего каталога вручную
+useradd -g groupname username # с указанием группы пользователей
+cat /etc/group
+useradd -G group1,group2 username # добаление в дополнительные группы пользователей
+useradd -u 1001 username # с указанием UID 
+useradd -e 2026-02-03 username # с истекающим паролем
+passwd username # создание пользователя с паролем
+# создание группу
+groupadd groupname
+groupadd -g 1001 groupname # создание группы с GID 1001
+# добавление пользователя в группу
+usermod -aG groupname username # добавление пользователя в группу
+# удаление пользователя из группы
+gpasswd -d username groupname # удаление пользователя из группы
+
+
+#chown and chmod
+chown username filename # изменение владельца
+chown username:groupname filename  # изменение владельца и группы
+chown -R username:groupname directory # изменение владельца и группы в директории ко всем файлам
+chmod 755 filename # для файла 7-rwx, 5-r-x, 5-r-x
+chmod 644 directory # для директории 6-rw-, 4-r--, 4-r--
+chmod -R 755 directory # для всех файлов и поддиректорий
+chmod +x filename # право на исполнение для всех пользователей
+chown username:groupname filename && chmod 755 filename # устанавливает владельца и потом меняет права доступа
+#SUID и SGID
+chmod u+s filename # установка SUID
+chmod g+s directory # установка SGID на директорию
+
+# ACL
+setfacl -m u:erick:rw file4 # -m модификация ACL и прописываем права на чтение и запись
+getfacl file4 # просмотреть ACL
+setfacl -R -m u:erick:rwx data # рекурсивнаям установка доп атрибутов
+setfacl -x u:erick file4 #удаление записи ACL
+setfacl -b file4 # удаление всех записей
+# Маска ACL определяет максимальные права, которые могут быть предоставлены. 
+setfacl -m m::r file4 # маска на чтение
+
+#capabilities
+getcap /usr/bin/ping #просмотр capabilities на утилиту ping
+cap_net_raw=ep
+# установка capabilities
+sudo setcap cap_net_raw+ep /usr/bin/ping # установка capabilities на утилиту ping
+getcap /usr/bin/ping # проверка установки capabilities
+# создание пользователя otus0502
+sudo useradd -m otus0502
+# Проверка работы ping без прав суперпользователя
+sudo -u otus0502 ping -c 3 8.8.8.8
+# удаление capabilities
+setcap -r /usr/bin/ping # удаление capabilities
+getcap /usr/bin/ping # проверка удаления capabilities
+# capacities позволяют предоставлять определенные привилегии программам без необходимости предоставления им полного доступа суперпользователя.
+# capabilities в docker
+docker run -itd --name nginx --privileged nginx sleep 36000 # запуск контейнера с привилегиями
+# заходим в контейнер
+docker exec -it nginx bash
+# смотрим доступные устройства
+ls -la /dev
+# видим что у нас есть доступ ко всем устройствам хостовой системы
+# выходим из контейнера
+exit
+# зупускаем контейнер с capabilities
+docker run -itd --name nginx_cap --cap-drop=ALL nginx
+# не запускактся контейнер
+# запускаем контейнер с добавлением capabilities
+docker run -it --cap-drop=ALL --cap-add=CHOWN --cap-add=SETGID --cap-add=SETUID --cap-add=NET_BIND_SERVICE nginx bash
+# где --cap-drop=ALL удаляет все capabilities по умолчанию
+# --cap-add=CHOWN добавляет capability для изменения владельца файлов
+# --cap-add=SETGID добавляет capability для изменения групповой идентификации
+# --cap-add=SETUID добавляет capability для изменения пользовательской идентификации
+# --cap-add=NET_BIND_SERVICE добавляет capability для привязки к привилегированным портам (ниже 1024)
+# заходим в контейнер
+docker exec -it nginx_cap bash
+# проверяем capabilities
+cat /proc/self/status | grep CapEff
+# выходим из контейнера
+exit
+docker rm -f nginx_cap
+docker rm -f nginx
+
+# Polkit
+# Polkit позволяет управлять привилегиями для не-root пользователей.
+
+# Проверим, что Polkit установлен:
+dpkg -l | grep polkit
+# Заходим в системные файлы Polkit:
+cd /usr/share/polkit-1/actions/
+ls *.policy # просмотр доступных политик
+# Просмотрим политику для systemd:
+cat org.freedesktop.systemd1.policy
+# В этом файле определены действия, которые могут быть выполнены через Polkit для systemd, такие как управление юнитами, изменение настроек и т.д.
+# Основные значения для правил Polkit:
+# no — запрещено
+# yes — разрешено без аутентификации
+# auth_self — требуется пароль текущего пользователя
+# auth_admin — требуется пароль администратора (root / sudo)
+# *_keep — с кэшированием учётных данных на короткое время (~5 минут)
+
+# Включим логирование для Polkit:
+sudo tee /etc/polkit-1/rules.d/00-access.rules <<EOF
+polkit.addRule(function(action, subject){
+    polkit.log("action="+action);
+    polkit.log("subject="+subject);
+});
+EOF
+# синтаксис создания правил Polkit использует JavaScript-подобный язык. 
+
+# Создадим правило для управления systemd:
+sudo tee /etc/polkit-1/rules.d/49-erick-systemd.rules > /dev/null <<'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "erick") {
+        return polkit.Result.YES;
+    }
+});
+EOF # разрешаем пользователю выполнять действия управления systemd
+
+# Проверим действия, доступные через Polkit:
+pkaction # список всех действий
+# 
+# Проверим авторизацию для конкретного действия:
+pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ # проверка прав для управления systemd
+# pkcheck: проверяет, имеет ли текущий пользователь права на выполнение указанного действия.
+# Перезагрузим службу Polkit, чтобы применить изменения:
+sudo systemctl restart polkit
+# Теперь пользователь должен иметь возможность управлять systemd без необходимости использовать sudo.
+# Проверим это, попытавшись перезапустить службу (например, cron):
+systemctl --user restart cron.service
+# Удалим созданные правила после проверки:
+sudo rm /etc/polkit-1/rules.d/00-access.rules
+sudo rm /etc/polkit-1/rules.d/01-systemd.rules
+sudo systemctl restart polkit
+
+# PAM
+# PAM (Pluggable Authentication Modules) — это система, которая позволяет администраторам настраивать методы аутентификации для различных сервисов в Linux.
+#PAM предоставляет гибкую аутентификацию через модули.
+# Тест аутентификации пользователя otus0512 для сервиса login
+pamtester login otus0512 authenticate
+
+# Тест полного цикла (auth + account + session)
+pamtester -v login otus0512 authenticate open_session close_session
+
+# Посмотрим конфигурацию PAM для SSH:
+cat /etc/pam.d/sshd
+# В этом файле определены модули PAM, используемые при аутентификации через SSH, а именно:
+@include common-auth # включает общие настройки аутентификации
+account    required     pam_nologin.so # запрещает вход, если файл /etc/nologin существует
+@include common-account # включает общие настройки учетных записей
+session [success=ok ignore=ignore module_unknown=ignore default=bad]        pam_selinux.so close # управление контекстами SELinux
+session    required     pam_loginuid.so # установка идентификатора входа
+session    optional     pam_keyinit.so force revoke # инициализация ключей
+@include common-session # включает общие настройки сессий
+session    optional     pam_motd.so  motd=/run/motd.dynamic # отображение сообщения дня
+session    optional     pam_motd.so noupdate # отображение статического сообщения дня
+session    optional     pam_mail.so standard noenv # проверка почты
+session    required     pam_limits.so # управление лимитами ресурсов
+session    required     pam_env.so # [1] установка переменных окружения
+session    required     pam_env.so user_readenv=1 envfile=/etc/default/locale # [2] установка переменных окружения из файла
+session [success=ok ignore=ignore module_unknown=ignore default=bad]        pam_selinux.so open # управление контекстами SELinux
+@include common-password # включает общие настройки паролей
+# required - если модуль неудачен, вся аутентификация проваливается. Что это значит?
+# Если модуль помечен как required и он не проходит, то вся аутентификация завершается неудачей, независимо от результатов других модулей.
+# requisite - если модуль неудачен, аутентификация проваливается сразу. 
+# Это означает, что если модуль помечен как requisite и он не проходит, то аутентификация завершается немедленно без проверки других модулей.
+# sufficient - если модуль успешен и нет предыдущих неудач, аутентификация успешна.
+# Если модуль помечен как sufficient и он проходит успешно, а все предыдущие модули также прошли успешно, то аутентификация завершается успешно без проверки дальнейших модулей.
+# optional - результат модуля не влияет на общую аутентификацию.
+# Модуль помеченный как optional не влияет на итоговый результат аутентификации, независимо от того, прошел он или нет.
+
+# Обратим внимание на модуль pam_sepermit.so, который интегрирует PAM с SELinux:
+cat /etc/pam.d/common-auth | grep pam_sepermit # проверка SELinux перед аутентификацией
+# Что мы можем сделать с PAM?
+# Ограничить вход для определенных групп пользователей.
+# Управлять лимитами ресурсов для пользователей.
+
+
+# Посмотрим конфигурацию для входа в систему:
+cat /etc/pam.d/common-auth
+# В данном файле определены модули PAM, используемые для аутентификации пользователей при входе в систему:
+auth    [success=1 default=ignore]      pam_unix.so nullok # стандартная аутентификация по паролю
+auth    requisite                       pam_deny.so # всегда запрещает доступ
+auth    required                        pam_permit.so # всегда разрешает доступ
+auth    optional                        pam_cap.so # управление capabilities
+cat /etc/pam.d/common-account
+cat /etc/pam.d/common-password
+cat /etc/pam.d/common-session
+
+# Добавим правило, запрещающее вход пользователям, имеющим UID 1001:
+nano /etc/pam.d/common-auth
+# Добавляем строку в начало файла:
+# auth    required                        pam_succeed_if.so uid ne 1001
+# Проверим работу PAM с новым правилом:
+pamtester -v login otus0512 authenticate open_session close_session
+# Если текущий пользователь не имеет UID 1000, аутентификация будет отклонена.
+# Удалим добавленную строку после проверки:
+sed -i '/^auth\s\+required\s\+pam_succeed_if.so uid ne 1001$/d' /etc/pam.d/common-auth
+# Управление лимитами ресурсов с помощью PAM и pam_limits
+
+
+
+
+
+# Проверим, что модуль pam_limits установлен (управление лимитами):
+cat /etc/pam.d/common-session | grep pam_limits
+# Установим модуль pam_limits, если он не установлен:
+sudo apt-get install libpam-modules
+# Проверим текущие лимиты для пользователя:
+ulimit -a # просмотр всех лимитов
+# Установим лимит на количество открытых файлов:
+echo "erick hard nofile 3" | sudo tee -a /etc/security/limits.conf
+# Применим изменения, выйдя и войдя снова, или перезапустив сессию:
+ulimit -n 3 # проверка нового лимита
+# Проверим, что лимиты работают:
+exec 3<> testfile # открытие файлов
+exec 4<> testfile2
+exec 5<> testfile3
+exec 6<> testfile4 # это должно вызвать ошибку из-за превышения лимита
+# Удалим добавленную строку из limits.conf после проверки:
+sudo sed -i '/^'"$(whoami)"'\s\+hard\s\+nofile\s\+3$/d' /etc/security/limits.conf 
+
+docker run --ulimit nofile=65536:65536 --ulimit nproc=16384:16384 nginx
+
+
