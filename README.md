@@ -53,19 +53,24 @@ nano /usr/local/bin/login.sh
 
 ```
 #!/bin/bash
-#Первое условие: если день недели суббота или воскресенье
-if [ $(date +%a) = "Sat" ] || [ $(date +%a) = "Sun" ]; then
- #Второе условие: входит ли пользователь в группу ADMINS
- if getent group ADMINS | grep -qw "$PAM_USER"; then
-        #Если пользователь входит в группу admin, то он может подключиться
-        exit 0
-      else
-        #Иначе ошибка (не сможет подключиться)
-        exit 1
-    fi
-  #Если день не выходной, то подключиться может любой пользователь
+
+# Получаем текущий день недели (на английском)
+DAY=$(LANG=C date +%a)
+
+# Проверяем: суббота или воскресенье?
+if [ "$DAY" = "Sat" ] || [ "$DAY" = "Sun" ]; then
+  # Проверяем входит ли пользователь в группу ADMINS
+  if getent group ADMINS | grep -qw "$PAM_USER"; then
+    # Выходной день — пользователь из ADMINS — ЗАПРЕЩАЕМ
+    exit 1
   else
+    # Выходной день — обычный пользователь — РАЗРЕШАЕМ
     exit 0
+  fi
+else
+  # Рабочий день — все могут подключаться
+  exit 0
+fi
 ```
 
 В скрипте подписаны все условия. Скрипт работает по принципу: 
@@ -79,7 +84,15 @@ if [ $(date +%a) = "Sat" ] || [ $(date +%a) = "Sun" ]; then
 
 Проверка
 
-<img width="483" height="182" alt="image" src="https://github.com/user-attachments/assets/7b25f06f-e225-4982-91ff-1b89b6ce44a6" />
+<img width="512" height="62" alt="image" src="https://github.com/user-attachments/assets/e66b79f0-36c6-4246-b84a-5d318502d8b4" />
+
+
+проверка  после смены дат
+
+<img width="1269" height="150" alt="image" src="https://github.com/user-attachments/assets/819df117-2f8a-4b05-a8cb-b83bb5d7350b" />
+
+
+Таким образом мы добились огранчения доступа по дням  недели
 
 
 
